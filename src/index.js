@@ -1,7 +1,7 @@
-const express = require('express');
-const cors = require('cors');
+const express = require("express");
+const cors = require("cors");
 
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 
@@ -9,110 +9,147 @@ app.use(cors());
 app.use(express.json());
 
 const users = [];
+const customers = [];
 
-function checksExistsUserAccount(request, response, next) {
-  const { username } = request.headers;
+// Middleware
+function verifyIfExistsAccountCPF(request, response, next) {
+  const { cpf } = request.headers;
 
-  const user = users.find((user) => user.username === username);
+  const customer = customers.find((customer) => customer.cpf === cpf);
 
-  if (!user) {
-    return response.status(404).json({ error: "Usuário não encontrado" })
+  if (!customer) {
+    return response.status(404).json({ error: "Customer not found" });
   }
 
-  request.user = user;
+  request.customer = customer;
 
   return next();
 }
 
-app.post('/users', (request, response) => {
-  const { name, username } = request.body;
+function getBalance(statement) {
+  const balance = statement.reduce((acc, operation) => {
+    if (operation.type === "credit") {
+      return acc + operation.amount;
+    } else {
+      return acc - operation.amount;
+    }
+  }, 0);
 
-  const userExists = users.some((user) => user.username === username);
+  return balance;
+}
 
-  if (userExists) {
-    return response.status(400).json({ error: "Usuário ja existente" })
+app.post("/account", (request, response) => {
+  const { cpf, name } = request.body;
+
+  const customerAlreadyExists = customers.some(
+    (customer) => customer.cpf === cpf
+  );
+
+  if (customerAlreadyExists) {
+    return response.status(400).json({ error: "CPF ja existente" });
   }
 
-  const user = {
+  const customer = {
     id: uuidv4(),
     name,
-    username,
-    todos: []
-  }
+    cpf,
+    statements: [],
+  };
 
-  users.push(user);
+  customers.push(customer);
 
-  return response.status(201).json(user);
+  return response.status(201).json(customer);
 });
 
-app.get('/todos', checksExistsUserAccount, (request, response) => {
-  const { user } = request;
+app.put("/account", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
+  const { name } = request.body;
 
-  return response.json(user.todos);
+  customer.name = name;
+
+  return response.status(201).send();
 });
 
-app.post('/todos', checksExistsUserAccount, (request, response) => {
-  const { user } = request;
-  const { title, deadline } = request.body;
+app.get("/account", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
 
-  const todo = {
+  return response.json(customer);
+});
+
+app.get("/statement", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
+
+  return response.json(customer.statements);
+});
+
+app.post("/deposit", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
+  const { description, amount } = request.body;
+
+  const statementOperation = {
     id: uuidv4(),
-    title,
-    done: false,
-    deadline: new Date(deadline),
-    created_at: new Date()
-  }
+    description,
+    amount,
+    type: "credit",
+    created_at: new Date(),
+  };
 
-  user.todos.push(todo);
+  customer.statements.push(statementOperation);
 
-  return response.status(201).json(todo);
+  return response.status(201).json(statementOperation);
 });
 
-app.put('/todos/:id', checksExistsUserAccount, (request, response) => {
-  const { user } = request;
-  const { title, deadline } = request.body;
-  const { id } = request.params;
+app.post("/withdraw", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
+  const { amount } = request.body;
 
-  const todo = user.todos.find(todo => todo.id === id);
+  const balance = getBalance(customer.statements);
 
-  if (!todo) {
-    return response.status(404).json({ error: "Todo não encontrado" })
+  if (balance < amount) {
+    return response.status(400).json({ error: "Saldo insuficiente" });
   }
-  
-  todo.title = title;
-  title.deadline = new Date(deadline);
 
-  return response.json(todo);
+  const statementOperation = {
+    id: uuidv4(),
+    amount,
+    type: "debit",
+    created_at: new Date(),
+  };
+
+  customer.statements.push(statementOperation);
+
+  return response.status(201).json(statementOperation);
 });
 
-app.patch('/todos/:id/done', checksExistsUserAccount, (request, response) => {
-  const { user } = request;
-  const { id } = request.params;
+app.get("/statement/date", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
+  const { date } = request.query;
 
-  const todo = user.todos.find(todo => todo.id === id);
+  const dateFormat = new Date(date + " 00:00");
 
-  if (!todo) {
-    return response.status(404).json({ error: "Todo não encontrado" })
-  }
+  const statement = customer.statements.filter(
+    (statement) =>
+      statement.created_at.toDateString() ===
+      new Date(dateFormat).toDateString()
+  );
 
-  todo.done = true;
-
-  return response.json(todo);
+  return response.json(statement);
 });
 
-app.delete('/todos/:id', checksExistsUserAccount, (request, response) => {
-  const { user } = request;
-  const { id } = request.params;
+app.delete("/account", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
 
-  const todoIndex = user.todos.findIndex(todo => todo.id === id);
+  customers.splice(customer, 1);
 
-  if (todoIndex === -1) {
-    return response.status(404).json({ error: "Todo não encontrado" })
-  }
+  return response.status(200).json(customer);
+});
 
-  user.todos.splice(todoIndex, 1);
+app.get("/balance", verifyIfExistsAccountCPF, (request, response) => {
+  const { customer } = request;
 
-  return response.status(204).json();
+  const balance = getBalance(customer.statements);
+
+  return response.json(balance);
 });
 
 module.exports = app;
